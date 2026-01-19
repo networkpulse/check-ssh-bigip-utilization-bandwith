@@ -2,6 +2,7 @@
 
 ## Ecrit par Guillaume REYNAUD (Administrateur Réseau)
 ## V1.0 (16/01/2026) : Mise en place dans Icinga.
+## V1.1 (19/01/2026) : Correction du filtre GREP pour n'autoriser que le log de dépassement de bande passante ($cmd = q{tac /var/log/ltm 2>/dev/null | grep -m1 '01010045:5: Bandwidth utilization' || true};)
 ##
 
 use strict;
@@ -96,8 +97,8 @@ sub main {
         }
         
         # Exécution de la commande
-        # On ajoute '|| true' pour éviter que grep retourne un code d'erreur si rien n'est trouvé
-        my $cmd = q{tac /var/log/ltm 2>/dev/null | grep -m1 'Licensed' || true};
+        # Chercher spécifiquement les logs de dépassement de bande passante (01010045)
+        my $cmd = q{tac /var/log/ltm 2>/dev/null | grep -m1 '01010045:5: Bandwidth utilization' || true};
         my $log_line = $ssh->capture($cmd);
         
         # Vérifier les erreurs SSH critiques (mais pas le code de sortie de grep)
@@ -116,18 +117,19 @@ sub main {
         }
         
         # Vérifier si on a trouvé une ligne avec 'Licensed'
-        if (!defined $log_line || $log_line eq '' || $log_line !~ /Licensed/i) {
+        if (!defined $log_line || $log_line eq '' || $log_line !~ /01010045:5: Bandwidth utilization/i) {
             # Aucun dépassement trouvé dans les logs - tout est OK
             if ($debug) {
-                print STDERR "DEBUG: Aucune ligne 'Licensed' trouvée dans /var/log/ltm\n";
+                print STDERR "DEBUG: Aucune ligne de dépassement de bande passante (01010045) trouvée dans /var/log/ltm\n";
             }
             print "OK - Aucun historique de dépassement de bande passante trouvé dans les logs | bandwidth_percent=0%;${warning};${critical};0;150\n";
             exit OK;
         }
         
         # Parse de la ligne de log
-        # Format: Jan 15 11:10:38 BIGIP-CLOUD-1.scn1.cloud notice tmm[126422]: 01010045:5: Bandwidth utilization is 1070 Mbps, exceeded 75% of Licensed 1000 Mbps.
-        if ($log_line =~ /Bandwidth utilization is (\d+) Mbps.*Licensed (\d+) Mbps/) {
+        # Format attendu: Jan 15 11:10:38 BIGIP-CLOUD notice tmm[126422]: 01010045:5: Bandwidth utilization is 1070 Mbps, exceeded 75% of Licensed 1000 Mbps.
+        # On vérifie d'abord que c'est bien le bon type de log (01010045)
+        if ($log_line =~ /01010045:5: Bandwidth utilization is (\d+) Mbps.*Licensed (\d+) Mbps/) {
             my ($used, $licensed) = ($1, $2);
             
             # Calculer le vrai pourcentage d'utilisation
